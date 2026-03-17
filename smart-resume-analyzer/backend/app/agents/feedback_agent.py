@@ -1,70 +1,57 @@
-"""FeedbackAgent — generates actionable resume feedback via GPT-4o-mini.
+"""FeedbackAgent — generates actionable resume feedback via Google Gemini.
 
-Calls the OpenAI API with structured prompts built from the analysis
-pipeline output. Falls back to rule-based feedback generation if the
-API call fails (network error, rate limit, invalid key, etc.).
+Calls the Google Gemini 1.5 Flash API with a structured prompt built from
+the analysis pipeline output. Falls back to rule-based feedback generation
+if the API call fails (network error, rate limit, invalid key, etc.).
 """
 
+import json
 import logging
+import os
 from typing import Any
 
-import openai
+import google.generativeai as genai
 
 from app.agents.base_agent import BaseAgent
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# ─── System Prompt ───────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """You are an expert resume coach with 10+ years of experience in tech hiring, \
+# ─── Prompt Template ────────────────────────────────────────────────────────
+PROMPT_TEMPLATE = """You are an expert resume coach with 10+ years of experience in tech hiring, \
 ATS optimization, and career development. You have reviewed thousands of resumes across all \
 seniority levels. Your feedback is specific, actionable, and encouraging.
 
-Given the resume analysis data below, provide:
-1. A 2-3 sentence summary of the resume's overall quality.
-2. A list of 3-5 specific, prioritized suggestions grouped by section.
-3. A one-line tone assessment (e.g., "Professional but could be more concise").
-4. An estimated score improvement if all suggestions are implemented.
+Resume analysis data:
+- Overall score: {resume_score}/100
+- ATS score: {ats_score}/100
+- Component scores: {component_scores_text}
+- Strengths: {strengths_text}
+- Areas for improvement: {improvements_text}
+- Present skills ({present_count}): {present_skills_text}
+- Missing skills (from job description): {missing_skills_text}
+- Top career predictions: {career_predictions_text}
+- Resume text excerpt: {resume_excerpt}
 
-Be direct and specific. Avoid generic advice. Reference the actual scores and data provided."""
+Provide:
+1. A 2-3 sentence summary of the resume's overall quality
+2. Three specific improvement suggestions with section, issue, and fix
+3. A one-line tone assessment
+4. Estimated score improvement if all changes are made
 
-USER_PROMPT_TEMPLATE = """## Resume Analysis Data
-
-**Resume Score:** {resume_score}/100
-**ATS Score:** {ats_score}/100
-
-### Component Scores
-{component_scores_text}
-
-### Strengths
-{strengths_text}
-
-### Areas for Improvement
-{improvements_text}
-
-### Present Skills ({present_count})
-{present_skills_text}
-
-### Missing Skills (from Job Description)
-{missing_skills_text}
-
-### Top Career Predictions
-{career_predictions_text}
-
----
-
-Based on this analysis, provide your structured feedback."""
+Reply in this JSON format ONLY — no markdown, no code fences, just raw JSON:
+{{"summary_feedback": "...", "detailed_suggestions": [{{"section": "...", "issue": "...", "fix": "..."}}], "tone_analysis": "...", "estimated_improvement": 5}}"""
 
 
 class FeedbackAgent(BaseAgent):
-    """Generates AI-powered resume feedback using GPT-4o-mini.
+    """Generates AI-powered resume feedback using Google Gemini 1.5 Flash.
 
-    Falls back to deterministic rule-based feedback if the OpenAI
+    Falls back to deterministic rule-based feedback if the Gemini
     API is unavailable or returns an error.
     """
 
     name: str = "feedback_agent"
-    version: str = "1.0.0"
+    version: str = "2.0.0"
 
     async def process(self, input_data: dict[str, Any]) -> dict[str, Any]:
         """Generate structured resume feedback.
@@ -83,18 +70,19 @@ class FeedbackAgent(BaseAgent):
             Dict with summary_feedback, detailed_suggestions,
             tone_analysis, estimated_improvement, source.
         """
-        logger.info("FeedbackAgent — generating resume feedback")
+        logger.info("FeedbackAgent — generating resume feedback via Gemini")
 
         # Try AI-powered feedback first
         try:
             result = await self._generate_ai_feedback(input_data)
-            result["source"] = "openai_gpt4o_mini"
-            logger.info("FeedbackAgent — AI feedback generated successfully")
+            result["source"] = "google_gemini_flash"
+            logger.info("FeedbackAgent — Gemini feedback generated successfully")
             return result
         except Exception as exc:
             logger.warning(
-                "FeedbackAgent — OpenAI API failed (%s), falling back to rule-based",
+                "FeedbackAgent — Gemini API failed (%s: %s), falling back to rule-based",
                 type(exc).__name__,
+                str(exc),
             )
             result = self._generate_rule_based_feedback(input_data)
             result["source"] = "rule_based_fallback"
@@ -103,7 +91,7 @@ class FeedbackAgent(BaseAgent):
     async def _generate_ai_feedback(
         self, input_data: dict[str, Any]
     ) -> dict[str, Any]:
-        """Generate feedback using OpenAI GPT-4o-mini.
+        """Generate feedback using Google Gemini 1.5 Flash.
 
         Args:
             input_data: Pipeline analysis data.
@@ -112,34 +100,28 @@ class FeedbackAgent(BaseAgent):
             Structured feedback dict.
 
         Raises:
-            openai.OpenAIError: On API failure.
-            ValueError: If API key is not configured.
+            ValueError: If GEMINI_API_KEY is not configured.
+            Exception: On Gemini API failure.
         """
-        api_key = settings.OPENAI_API_KEY
+        api_key = settings.GEMINI_API_KEY
         if not api_key:
-            raise ValueError("OPENAI_API_KEY not configured")
+            raise ValueError("GEMINI_API_KEY not configured")
 
-        # Build the user prompt from analysis data
-        user_prompt = self._build_user_prompt(input_data)
+        # Configure and call the Gemini API
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
 
-        client = openai.AsyncOpenAI(api_key=api_key)
+        prompt_text = self._build_prompt(input_data)
 
-        response = await client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            max_tokens=500,
-            temperature=0.3,
-        )
+        response = model.generate_content(prompt_text)
+        result_text = response.text
 
-        ai_text = response.choices[0].message.content or ""
-        return self._parse_ai_response(ai_text, input_data)
+        logger.info("FeedbackAgent — received %d-char response from Gemini", len(result_text))
+        return self._parse_ai_response(result_text, input_data)
 
     @staticmethod
-    def _build_user_prompt(input_data: dict[str, Any]) -> str:
-        """Build the user prompt from pipeline analysis data.
+    def _build_prompt(input_data: dict[str, Any]) -> str:
+        """Build the Gemini prompt from pipeline analysis data.
 
         Args:
             input_data: Analysis data from the pipeline.
@@ -154,46 +136,46 @@ class FeedbackAgent(BaseAgent):
         career_predictions = input_data.get("career_predictions", [])
         strengths = input_data.get("strengths", [])
         improvements = input_data.get("improvements", [])
+        resume_text = input_data.get("resume_text", "")
 
         # Format component scores
         comp_lines = []
         for name, value in component_scores.items():
-            comp_lines.append(f"- {name.title()}: {value}")
-        component_scores_text = "\n".join(comp_lines) or "- No component scores available"
+            comp_lines.append(f"{name.title()}: {value}")
+        component_scores_text = ", ".join(comp_lines) or "No component scores available"
 
         # Format career predictions
         pred_lines = []
         for pred in career_predictions[:3]:
             role = pred.get("role", "Unknown")
-            confidence = pred.get("confidence", 0)
             match = pred.get("match_percentage", 0)
-            pred_lines.append(f"- {role}: {match:.0f}% match (confidence: {confidence:.2f})")
-        career_predictions_text = "\n".join(pred_lines) or "- No predictions available"
+            pred_lines.append(f"{role} ({match:.0f}% match)")
+        career_predictions_text = ", ".join(pred_lines) or "No predictions available"
 
-        return USER_PROMPT_TEMPLATE.format(
+        return PROMPT_TEMPLATE.format(
             resume_score=scores.get("total_score", 0),
             ats_score=scores.get("ats_score", 0),
             component_scores_text=component_scores_text,
-            strengths_text="\n".join(f"- {s}" for s in strengths) or "- None identified",
-            improvements_text="\n".join(f"- {i}" for i in improvements) or "- None identified",
+            strengths_text=", ".join(strengths) or "None identified",
+            improvements_text=", ".join(improvements) or "None identified",
             present_count=len(present_skills),
             present_skills_text=", ".join(present_skills[:20]) or "None found",
             missing_skills_text=", ".join(missing_skills[:10]) or "None (no job description provided)",
             career_predictions_text=career_predictions_text,
+            resume_excerpt=resume_text[:800],
         )
 
     @staticmethod
     def _parse_ai_response(
         ai_text: str, input_data: dict[str, Any]
     ) -> dict[str, Any]:
-        """Parse GPT response into structured feedback.
+        """Parse Gemini response into structured feedback.
 
-        The AI response is kept as free-text summary_feedback.
-        We extract structured suggestions deterministically from
-        the pipeline data to ensure consistency.
+        Attempts to parse the JSON response. Falls back to using the
+        raw text as summary_feedback if JSON parsing fails.
 
         Args:
-            ai_text: Raw text from GPT-4o-mini.
+            ai_text: Raw text from Gemini 1.5 Flash.
             input_data: Original pipeline data.
 
         Returns:
@@ -201,52 +183,45 @@ class FeedbackAgent(BaseAgent):
         """
         scores = input_data.get("scores", {})
         total_score = scores.get("total_score", 0)
-        improvements = input_data.get("improvements", [])
 
-        # Build detailed suggestions from improvements
-        section_map = {
-            "summary": "Summary/Objective",
-            "objective": "Summary/Objective",
-            "skills": "Skills",
-            "project": "Projects",
-            "experience": "Experience",
-            "format": "Formatting",
-            "quantif": "Impact Metrics",
-            "action verb": "Language",
-            "short": "Length",
-            "long": "Length",
-        }
+        # Try to parse JSON from the response
+        try:
+            # Strip markdown code fences if present
+            cleaned = ai_text.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
+                if cleaned.endswith("```"):
+                    cleaned = cleaned[:-3]
+                cleaned = cleaned.strip()
+                # Remove language identifier if present (e.g., "json")
+                if cleaned.startswith("json"):
+                    cleaned = cleaned[4:].strip()
 
-        detailed_suggestions: list[dict[str, str]] = []
-        for improvement in improvements:
-            section = "General"
-            imp_lower = improvement.lower()
-            for keyword, sect in section_map.items():
-                if keyword in imp_lower:
-                    section = sect
-                    break
-            detailed_suggestions.append({
-                "section": section,
-                "issue": improvement,
-                "fix": _generate_fix_suggestion(improvement),
-            })
+            parsed = json.loads(cleaned)
 
-        # Estimate potential improvement
-        gap = 100 - total_score
-        estimated_improvement = min(round(gap * 0.6), 35)  # realistic cap
+            return {
+                "summary_feedback": parsed.get("summary_feedback", ai_text.strip()),
+                "detailed_suggestions": parsed.get("detailed_suggestions", []),
+                "tone_analysis": parsed.get("tone_analysis", ""),
+                "estimated_improvement": parsed.get("estimated_improvement", 0),
+            }
+        except (json.JSONDecodeError, KeyError, TypeError):
+            logger.warning("FeedbackAgent — failed to parse Gemini JSON, using raw text")
 
-        return {
-            "summary_feedback": ai_text.strip(),
-            "detailed_suggestions": detailed_suggestions,
-            "tone_analysis": _analyze_tone(input_data),
-            "estimated_improvement": estimated_improvement,
-        }
+            # Fallback: use the raw AI text as the summary
+            gap = 100 - total_score
+            return {
+                "summary_feedback": ai_text.strip(),
+                "detailed_suggestions": [],
+                "tone_analysis": "",
+                "estimated_improvement": min(round(gap * 0.5), 30),
+            }
 
     @staticmethod
     def _generate_rule_based_feedback(
         input_data: dict[str, Any],
     ) -> dict[str, Any]:
-        """Generate deterministic feedback when AI is unavailable.
+        """Generate deterministic feedback when Gemini is unavailable.
 
         Uses scores and improvements from the pipeline to construct
         feedback without any external API calls.
@@ -267,16 +242,16 @@ class FeedbackAgent(BaseAgent):
         # Summary
         if total_score >= 80:
             quality = "strong"
-            tone = "This resume is well-structured and impactful."
+            tone = "Professional and results-oriented resume with strong impact"
         elif total_score >= 60:
             quality = "good with room for improvement"
-            tone = "The resume has a solid foundation but needs polish in key areas."
+            tone = "Solid foundation but needs polish in key areas"
         elif total_score >= 40:
             quality = "average"
-            tone = "The resume needs significant improvements to stand out to recruiters."
+            tone = "Needs significant improvements to stand out to recruiters"
         else:
             quality = "below average"
-            tone = "The resume requires a major overhaul to be competitive."
+            tone = "Requires a major overhaul to be competitive"
 
         summary_parts = [
             f"Your resume scored {total_score}/100 overall and {ats_score}/100 for ATS compatibility, "
@@ -298,11 +273,11 @@ class FeedbackAgent(BaseAgent):
 
         summary_feedback = " ".join(summary_parts)
 
-        # Suggestions
+        # Build detailed suggestions from improvements
         detailed_suggestions: list[dict[str, str]] = []
-        for improvement in improvements[:5]:
+        for improvement in improvements[:3]:
             detailed_suggestions.append({
-                "section": "General",
+                "section": _classify_section(improvement),
                 "issue": improvement,
                 "fix": _generate_fix_suggestion(improvement),
             })
@@ -321,6 +296,34 @@ class FeedbackAgent(BaseAgent):
 
 # ─── Helper Functions ────────────────────────────────────────────────────────
 
+def _classify_section(improvement: str) -> str:
+    """Classify an improvement suggestion into a resume section.
+
+    Args:
+        improvement: The improvement description text.
+
+    Returns:
+        Section name string.
+    """
+    imp_lower = improvement.lower()
+    section_map = {
+        "summary": "Summary/Objective",
+        "objective": "Summary/Objective",
+        "skills": "Skills",
+        "project": "Projects",
+        "experience": "Experience",
+        "format": "Formatting",
+        "quantif": "Impact Metrics",
+        "action verb": "Language",
+        "short": "Length",
+        "long": "Length",
+    }
+    for keyword, section in section_map.items():
+        if keyword in imp_lower:
+            return section
+    return "General"
+
+
 def _generate_fix_suggestion(improvement: str) -> str:
     """Generate a specific fix suggestion for an improvement point.
 
@@ -335,8 +338,7 @@ def _generate_fix_suggestion(improvement: str) -> str:
     if "summary" in imp_lower or "objective" in imp_lower:
         return (
             "Add a 2-3 sentence professional summary at the top. "
-            "Start with your title, years of experience, and key specialization. "
-            "Example: 'Senior Backend Engineer with 5+ years building scalable Python/FastAPI microservices.'"
+            "Start with your title, years of experience, and key specialization."
         )
     if "skills" in imp_lower:
         return (
@@ -345,7 +347,7 @@ def _generate_fix_suggestion(improvement: str) -> str:
         )
     if "project" in imp_lower:
         return (
-            "Add 2-3 projects with: project name, 1-2 line description, "
+            "Add 2-3 projects with: project name, description, "
             "technologies used, and a link to the repo or demo."
         )
     if "action verb" in imp_lower:
@@ -374,31 +376,3 @@ def _generate_fix_suggestion(improvement: str) -> str:
         )
 
     return "Review this area and apply best practices from top-performing resumes in your field."
-
-
-def _analyze_tone(input_data: dict[str, Any]) -> str:
-    """Analyze the overall tone of the resume based on scores.
-
-    Args:
-        input_data: Pipeline analysis data.
-
-    Returns:
-        One-line tone assessment string.
-    """
-    scores = input_data.get("scores", {})
-    component = scores.get("component_scores", {})
-
-    exp_score = component.get("experience", 0)
-    obj_score = component.get("objectives", 0)
-    proj_score = component.get("projects", 0)
-
-    if exp_score >= 8 and obj_score >= 20:
-        return "Professional and results-oriented — strong executive tone"
-    if proj_score >= 20 and obj_score < 15:
-        return "Technical and project-focused — consider adding a professional summary for balance"
-    if exp_score >= 5 and proj_score >= 15:
-        return "Well-balanced between experience and projects — shows practical capability"
-    if obj_score >= 15:
-        return "Clear goals but could strengthen with more concrete examples and metrics"
-
-    return "Needs more professional polish — focus on action verbs and quantifiable achievements"

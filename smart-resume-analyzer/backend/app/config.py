@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # ─── OpenAI ───
     OPENAI_API_KEY: str = ""
 
+    # ─── Google Gemini ───
+    GEMINI_API_KEY: str = ""
+
     # ─── File Uploads ───
     UPLOAD_DIR: str = "./uploads"
     MAX_FILE_SIZE_MB: int = 10
