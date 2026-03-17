@@ -1,32 +1,32 @@
-"""Pydantic schemas for Authentication."""
+"""Pydantic v2 schemas for authentication flows."""
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
+from app.schemas.user import UserResponse
 
 
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    full_name: str
-    password: str
-
+# ─── Token Response ──────────────────────────────────────────────────────────
 
 class TokenResponse(BaseModel):
+    """JWT token returned after successful authentication."""
+
     access_token: str
     token_type: str = "bearer"
+    user: UserResponse
 
+
+# ─── Google OAuth ────────────────────────────────────────────────────────────
 
 class GoogleAuthRequest(BaseModel):
-    token: str  # Google OAuth ID token
+    """Payload for Google OAuth code exchange."""
 
+    code: str = Field(min_length=1, description="Authorization code from Google")
+    redirect_uri: str = Field(min_length=1, description="OAuth redirect URI")
+
+
+# ─── Password Reset ─────────────────────────────────────────────────────────
 
 class PasswordResetRequest(BaseModel):
+    """Payload for initiating a password reset."""
+
     email: EmailStr
-
-
-class PasswordResetConfirm(BaseModel):
-    token: str
-    new_password: str

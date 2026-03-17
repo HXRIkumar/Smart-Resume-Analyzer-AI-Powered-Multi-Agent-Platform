@@ -1,34 +1,46 @@
-"""Pydantic schemas for User."""
+"""Pydantic v2 schemas for User operations."""
 
+import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
-class UserBase(BaseModel):
+# ─── Request Schemas ─────────────────────────────────────────────────────────
+
+class UserCreate(BaseModel):
+    """Schema for user registration."""
+
     email: EmailStr
-    full_name: str
+    password: str = Field(min_length=8, max_length=128)
+    full_name: str = Field(min_length=1, max_length=255)
 
 
-class UserCreate(UserBase):
-    password: str
+class UserLogin(BaseModel):
+    """Schema for email/password login."""
+
+    email: EmailStr
+    password: str = Field(min_length=1)
 
 
 class UserUpdate(BaseModel):
-    full_name: str | None = None
+    """Schema for updating user profile (partial update)."""
+
+    full_name: str | None = Field(default=None, min_length=1, max_length=255)
     email: EmailStr | None = None
 
 
-class UserResponse(UserBase):
-    id: int
+# ─── Response Schemas ────────────────────────────────────────────────────────
+
+class UserResponse(BaseModel):
+    """Public user representation — never exposes password hash."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    email: str
+    full_name: str
+    role: str
     is_active: bool
-    is_admin: bool
-    auth_provider: str
     created_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-class UserListResponse(BaseModel):
-    users: list[UserResponse]
-    total: int
+    updated_at: datetime | None = None
