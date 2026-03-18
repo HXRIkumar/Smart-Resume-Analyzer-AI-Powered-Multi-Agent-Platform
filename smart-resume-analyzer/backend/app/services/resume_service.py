@@ -1,81 +1,150 @@
-"""Resume service — CRUD + file handling."""
+"""Resume service — file upload, CRUD, and ownership checks."""
 
 import os
-import uuid
+import uuid as uuid_mod
+from uuid import UUID
 
 from fastapi import UploadFile
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models.resume import Resume
-from app.utils.exceptions import BadRequestError, NotFoundError
-from app.utils.file_utils import save_upload_file, delete_file
+from app.utils.exceptions import (
+    FileTooLargeError,
+    InvalidFileTypeError,
+    ResumeNotFoundError,
+    UnauthorizedResumeAccess,
+)
 
 
 class ResumeService:
-    """Handles resume CRUD operations and file management."""
+    """Handles resume file upload, retrieval, and deletion.
+
+    All queries are scoped to the authenticated user's ID to
+    enforce ownership — a user can only access their own resumes.
+    """
 
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def upload(self, file: UploadFile, user_id: int) -> Resume:
-        """Save uploaded PDF and create database record."""
-        # Validate file size
+    async def upload_resume(
+        self, user_id: UUID, file: UploadFile
+    ) -> Resume:
+        """Validate, save, and record a resume PDF upload.
+
+        Args:
+            user_id: Authenticated user's UUID.
+            file: FastAPI UploadFile from the request.
+
+        Returns:
+            The created Resume ORM instance.
+
+        Raises:
+            InvalidFileTypeError: If file is not a PDF.
+            FileTooLargeError: If file exceeds MAX_FILE_SIZE_MB.
+        """
+        # ── Validate file type ───────────────────────────────────────────
+        content_type = file.content_type or ""
+        filename = file.filename or "resume.pdf"
+
+        if content_type != "application/pdf" and not filename.lower().endswith(".pdf"):
+            raise InvalidFileTypeError()
+
+        # ── Read and validate size ───────────────────────────────────────
         content = await file.read()
         max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
         if len(content) > max_bytes:
-            raise BadRequestError(f"File exceeds {settings.MAX_FILE_SIZE_MB}MB limit")
+            raise FileTooLargeError(max_mb=settings.MAX_FILE_SIZE_MB)
 
-        # Save to disk
-        ext = os.path.splitext(file.filename or "resume.pdf")[1]
-        unique_name = f"{uuid.uuid4().hex}{ext}"
-        file_path = save_upload_file(content, unique_name)
+        # ── Generate unique filename and save ────────────────────────────
+        safe_original = filename.replace(" ", "_")
+        unique_name = f"{uuid_mod.uuid4().hex}_{safe_original}"
+        user_dir = os.path.join(settings.UPLOAD_DIR, str(user_id))
+        os.makedirs(user_dir, exist_ok=True)
 
+        file_path = os.path.join(user_dir, unique_name)
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+        # ── Create DB record ────────────────────────────────────────────
         resume = Resume(
             user_id=user_id,
-            filename=file.filename or "resume.pdf",
+            original_filename=filename,
             file_path=file_path,
             file_size_bytes=len(content),
-            mime_type=file.content_type or "application/pdf",
         )
         self.db.add(resume)
         await self.db.flush()
         await self.db.refresh(resume)
         return resume
 
-    async def list_by_user(
-        self, user_id: int, skip: int = 0, limit: int = 20
-    ) -> tuple[list[Resume], int]:
-        """List resumes for a user with pagination."""
-        query = (
+    async def get_user_resumes(self, user_id: UUID) -> list[Resume]:
+        """Return all resumes belonging to a user, newest first.
+
+        Args:
+            user_id: Owner's UUID.
+
+        Returns:
+            List of Resume models.
+        """
+        result = await self.db.execute(
             select(Resume)
             .where(Resume.user_id == user_id)
-            .order_by(Resume.created_at.desc())
-            .offset(skip)
-            .limit(limit)
+            .order_by(Resume.uploaded_at.desc())
         )
-        result = await self.db.execute(query)
-        resumes = list(result.scalars().all())
+        return list(result.scalars().all())
 
-        count_result = await self.db.execute(
-            select(func.count(Resume.id)).where(Resume.user_id == user_id)
-        )
-        total = count_result.scalar() or 0
-        return resumes, total
+    async def get_resume_by_id(
+        self, resume_id: UUID, user_id: UUID
+    ) -> Resume:
+        """Fetch a single resume, enforcing ownership.
 
-    async def get_by_id(self, resume_id: int, user_id: int) -> Resume | None:
-        """Get a specific resume by ID, scoped to user."""
+        Args:
+            resume_id: Target resume UUID.
+            user_id: Authenticated user's UUID.
+
+        Returns:
+            Resume model.
+
+        Raises:
+            ResumeNotFoundError: If resume does not exist.
+            UnauthorizedResumeAccess: If user does not own the resume.
+        """
         result = await self.db.execute(
-            select(Resume).where(Resume.id == resume_id, Resume.user_id == user_id)
+            select(Resume).where(Resume.id == resume_id)
         )
-        return result.scalar_one_or_none()
+        resume = result.scalar_one_or_none()
+        if resume is None:
+            raise ResumeNotFoundError(resume_id)
+        if resume.user_id != user_id:
+            raise UnauthorizedResumeAccess()
+        return resume
 
-    async def delete(self, resume_id: int, user_id: int) -> bool:
-        """Delete a resume and its file from disk."""
-        resume = await self.get_by_id(resume_id, user_id)
-        if not resume:
-            return False
-        delete_file(resume.file_path)
+    async def delete_resume(
+        self, resume_id: UUID, user_id: UUID
+    ) -> bool:
+        """Delete a resume record and its file from disk.
+
+        Args:
+            resume_id: Target resume UUID.
+            user_id: Authenticated user's UUID.
+
+        Returns:
+            True if deleted successfully.
+
+        Raises:
+            ResumeNotFoundError: If resume does not exist.
+            UnauthorizedResumeAccess: If user does not own the resume.
+        """
+        resume = await self.get_resume_by_id(resume_id, user_id)
+
+        # Remove file from disk
+        try:
+            if os.path.exists(resume.file_path):
+                os.remove(resume.file_path)
+        except OSError:
+            pass  # File already deleted or inaccessible
+
         await self.db.delete(resume)
         return True

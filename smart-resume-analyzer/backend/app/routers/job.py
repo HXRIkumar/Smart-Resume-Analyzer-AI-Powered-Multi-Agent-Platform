@@ -1,58 +1,42 @@
-"""Job router — /job/* endpoints."""
+"""Job description router — /job/* endpoints for CRUD operations."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
+import uuid
+
+from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_current_user
-from app.models.user import User
+from app.dependencies import get_current_active_user
 from app.models.job_description import JobDescription
+from app.models.user import User
+from app.schemas.analysis import JobDescriptionCreate, JobDescriptionResponse
+from app.utils.exceptions import NotFoundError
 
 router = APIRouter()
 
 
-# ─── Inline schemas ───
-class JobDescriptionCreate(BaseModel):
-    title: str
-    company: str | None = None
-    description: str
-    required_skills: str | None = None
-    experience_level: str | None = None
-
-
-class JobDescriptionResponse(BaseModel):
-    id: int
-    title: str
-    company: str | None
-    description: str
-    required_skills: str | None
-    experience_level: str | None
-
-    model_config = {"from_attributes": True}
-
-
-class JobDescriptionListResponse(BaseModel):
-    jobs: list[JobDescriptionResponse]
-    total: int
-
-
-# ─── Endpoints ───
-@router.post("/", response_model=JobDescriptionResponse, status_code=status.HTTP_201_CREATED)
-async def create_job_description(
+@router.post(
+    "/submit",
+    response_model=JobDescriptionResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Submit a job description",
+    description=(
+        "Create a new job description entry. The description text "
+        "is used for skill gap analysis during resume evaluation."
+    ),
+)
+async def submit_job_description(
     data: JobDescriptionCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
-    """Create a new job description."""
+    """Submit a new job description for matching."""
     job = JobDescription(
         user_id=current_user.id,
         title=data.title,
+        description_text=data.description_text,
         company=data.company,
-        description=data.description,
-        required_skills=data.required_skills,
-        experience_level=data.experience_level,
     )
     db.add(job)
     await db.flush()
@@ -60,57 +44,37 @@ async def create_job_description(
     return job
 
 
-@router.get("/", response_model=JobDescriptionListResponse)
+@router.get(
+    "/",
+    response_model=list[JobDescriptionResponse],
+    summary="List user's job descriptions",
+    description="Returns all job descriptions created by the authenticated user, newest first.",
+)
 async def list_job_descriptions(
-    skip: int = 0,
-    limit: int = 20,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """List all job descriptions for the current user."""
-    query = (
+    result = await db.execute(
         select(JobDescription)
         .where(JobDescription.user_id == current_user.id)
-        .offset(skip)
-        .limit(limit)
         .order_by(JobDescription.created_at.desc())
     )
-    result = await db.execute(query)
-    jobs = result.scalars().all()
-
-    count_result = await db.execute(
-        select(JobDescription.id).where(JobDescription.user_id == current_user.id)
-    )
-    total = len(count_result.all())
-    return JobDescriptionListResponse(jobs=jobs, total=total)
+    return list(result.scalars().all())
 
 
-@router.get("/{job_id}", response_model=JobDescriptionResponse)
-async def get_job_description(
-    job_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Get a specific job description."""
-    result = await db.execute(
-        select(JobDescription).where(
-            JobDescription.id == job_id,
-            JobDescription.user_id == current_user.id,
-        )
-    )
-    job = result.scalar_one_or_none()
-    if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job description not found")
-    return job
-
-
-@router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{job_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a job description",
+    description="Delete a job description by ID. Returns 404 if not found or not owned.",
+)
 async def delete_job_description(
-    job_id: int,
+    job_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
-    """Delete a job description."""
+    """Delete a job description by ID."""
     result = await db.execute(
         select(JobDescription).where(
             JobDescription.id == job_id,
@@ -119,5 +83,5 @@ async def delete_job_description(
     )
     job = result.scalar_one_or_none()
     if not job:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job description not found")
+        raise NotFoundError("Job description not found")
     await db.delete(job)

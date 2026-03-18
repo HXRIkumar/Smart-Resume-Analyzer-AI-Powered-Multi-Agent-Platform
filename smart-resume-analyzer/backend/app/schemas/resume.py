@@ -1,30 +1,30 @@
-"""Pydantic schemas for Resume."""
+"""Pydantic v2 schemas for Resume upload and response."""
 
+import uuid
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class ResumeBase(BaseModel):
-    filename: str
+# ─── Response Schemas ────────────────────────────────────────────────────────
 
+class ResumeResponse(BaseModel):
+    """Full resume representation returned from API endpoints."""
 
-class ResumeResponse(ResumeBase):
-    id: int
-    user_id: int
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    user_id: uuid.UUID
+    original_filename: str
+    file_path: str
     file_size_bytes: int
-    mime_type: str
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
-
-
-class ResumeListResponse(BaseModel):
-    resumes: list[ResumeResponse]
-    total: int
+    uploaded_at: datetime
 
 
 class ResumeUploadResponse(BaseModel):
-    id: int
-    filename: str
+    """Response after successful resume upload."""
+
+    id: uuid.UUID
+    original_filename: str
+    file_size_bytes: int
     message: str = "Resume uploaded successfully"

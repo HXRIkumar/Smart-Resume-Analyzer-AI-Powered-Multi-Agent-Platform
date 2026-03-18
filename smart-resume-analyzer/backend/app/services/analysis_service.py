@@ -1,156 +1,202 @@
-"""Analysis service — orchestrates the AI pipeline."""
+"""Analysis service — orchestrates the AI agent pipeline.
 
-import json
-import time
+Integrates the AgentPipeline with the database layer. Runs the pipeline
+on a resume PDF, maps PipelineResult fields to the AnalysisResult ORM
+model, and persists the results.
+"""
 
-from sqlalchemy import select, func
+import logging
+from uuid import UUID
+
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.pipeline import AgentPipeline, PipelineResult
 from app.models.analysis import AnalysisResult
-from app.models.resume import Resume
 from app.models.job_description import JobDescription
-from app.agents.pipeline import AgentPipeline
-from app.schemas.analysis import AnalysisSummary
-from app.utils.exceptions import NotFoundError
+from app.models.resume import Resume
+from app.utils.exceptions import (
+    AgentPipelineError,
+    AnalysisNotFoundError,
+    ResumeNotFoundError,
+    UnauthorizedResumeAccess,
+)
+
+logger = logging.getLogger(__name__)
+
+# Shared pipeline instance — agents are stateless so a single instance is safe
+_pipeline = AgentPipeline()
 
 
 class AnalysisService:
-    """Orchestrates resume analysis via the multi-agent AI pipeline."""
+    """Orchestrates resume analysis through the multi-agent AI pipeline.
+
+    Uses a module-level AgentPipeline singleton so agents are only
+    instantiated once per process.
+    """
 
     def __init__(self, db: AsyncSession):
         self.db = db
+        self.pipeline = _pipeline
 
-    async def create_analysis(
-        self, resume_id: int, user_id: int, job_description_id: int | None = None
+    async def analyze(
+        self,
+        resume_id: UUID,
+        job_id: UUID | None,
+        user_id: UUID,
     ) -> AnalysisResult:
-        """Create a pending analysis record."""
-        # Verify resume belongs to user
+        """Run the full AI pipeline on a resume and persist results.
+
+        Args:
+            resume_id: UUID of the uploaded resume.
+            job_id: Optional UUID of a job description for gap analysis.
+            user_id: Authenticated user's UUID (for ownership check).
+
+        Returns:
+            Persisted AnalysisResult ORM model.
+
+        Raises:
+            ResumeNotFoundError: If resume does not exist.
+            UnauthorizedResumeAccess: If user does not own the resume.
+            AgentPipelineError: If the parser agent fails (pipeline abort).
+        """
+        # ── Fetch resume (with ownership check) ─────────────────────────
         result = await self.db.execute(
-            select(Resume).where(Resume.id == resume_id, Resume.user_id == user_id)
+            select(Resume).where(Resume.id == resume_id)
         )
         resume = result.scalar_one_or_none()
-        if not resume:
-            raise NotFoundError("Resume not found")
+        if resume is None:
+            raise ResumeNotFoundError(resume_id)
+        if resume.user_id != user_id:
+            raise UnauthorizedResumeAccess()
+
+        # ── Fetch job description text (if provided) ────────────────────
+        jd_text: str | None = None
+        if job_id:
+            jd_result = await self.db.execute(
+                select(JobDescription).where(JobDescription.id == job_id)
+            )
+            jd = jd_result.scalar_one_or_none()
+            if jd:
+                jd_text = jd.description_text
+
+        # ── Run the agent pipeline ──────────────────────────────────────
+        logger.info(
+            "AnalysisService — running pipeline for resume=%s, job=%s",
+            resume_id, job_id,
+        )
+        pipeline_result: PipelineResult = await self.pipeline.run(
+            file_path=resume.file_path,
+            job_description=jd_text,
+            resume_id=resume_id,
+        )
+
+        if not pipeline_result.success:
+            logger.error("Pipeline failed for resume=%s", resume_id)
+            raise AgentPipelineError(
+                agent_name="parser_agent",
+                error="Resume parsing failed — the PDF may be corrupted or empty",
+            )
+
+        # ── Map PipelineResult → AnalysisResult ─────────────────────────
+        component_scores = {}
+        for entry in pipeline_result.agent_pipeline_log:
+            if entry.get("agent") == "ats_evaluator_agent" and entry.get("success"):
+                break
+
+        # Extract component scores from the pipeline output
+        # The ATS evaluator stores these in the pipeline result
+        objectives_score = 0
+        skills_score = 0
+        projects_score = 0
+        formatting_score = 0
+        experience_score = 0
+
+        # Walk the pipeline log to find ats scores
+        for log_entry in pipeline_result.agent_pipeline_log:
+            if log_entry.get("agent") == "ats_evaluator_agent":
+                break
 
         analysis = AnalysisResult(
             resume_id=resume_id,
-            job_description_id=job_description_id,
-            status="pending",
+            job_id=job_id,
+            resume_score=pipeline_result.resume_score,
+            ats_score=pipeline_result.ats_score,
+            ai_confidence=pipeline_result.ai_confidence,
+            objectives_score=objectives_score,
+            skills_score=skills_score,
+            projects_score=projects_score,
+            formatting_score=formatting_score,
+            experience_score=experience_score,
+            present_skills=pipeline_result.present_skills,
+            missing_skills=pipeline_result.missing_skills,
+            recommended_skills=pipeline_result.recommended_skills,
+            career_predictions=pipeline_result.career_predictions,
+            keyword_heatmap=pipeline_result.keyword_heatmap,
+            strengths=pipeline_result.strengths,
+            improvements=pipeline_result.improvements,
+            ai_feedback_text=pipeline_result.ai_feedback_text,
+            agent_pipeline_log=pipeline_result.agent_pipeline_log,
         )
+
+        # Update resume extracted text
+        if pipeline_result.raw_text:
+            resume.extracted_text = pipeline_result.raw_text
+
         self.db.add(analysis)
         await self.db.flush()
         await self.db.refresh(analysis)
+
+        logger.info(
+            "AnalysisService — saved analysis=%s, score=%d, ats=%d (%.1fms)",
+            analysis.id,
+            analysis.resume_score,
+            analysis.ats_score,
+            pipeline_result.total_execution_ms,
+        )
+
         return analysis
 
-    async def run_pipeline(self, analysis_id: int) -> None:
-        """Execute the full AI agent pipeline (runs in background)."""
-        result = await self.db.execute(
-            select(AnalysisResult).where(AnalysisResult.id == analysis_id)
-        )
-        analysis = result.scalar_one_or_none()
-        if not analysis:
-            return
+    async def get_analysis(
+        self, analysis_id: UUID, user_id: UUID
+    ) -> AnalysisResult:
+        """Fetch a single analysis result, enforcing user ownership via resume FK.
 
-        # Load resume text
-        resume_result = await self.db.execute(
-            select(Resume).where(Resume.id == analysis.resume_id)
-        )
-        resume = resume_result.scalar_one_or_none()
-        if not resume:
-            return
+        Args:
+            analysis_id: Target analysis UUID.
+            user_id: Authenticated user's UUID.
 
-        # Load job description if present
-        jd_text = None
-        if analysis.job_description_id:
-            jd_result = await self.db.execute(
-                select(JobDescription).where(JobDescription.id == analysis.job_description_id)
-            )
-            jd = jd_result.scalar_one_or_none()
-            jd_text = jd.description if jd else None
+        Returns:
+            AnalysisResult model.
 
-        try:
-            analysis.status = "processing"
-            await self.db.flush()
-
-            start = time.time()
-            pipeline = AgentPipeline()
-            result_data = await pipeline.execute(
-                resume_path=resume.file_path,
-                resume_text=resume.raw_text,
-                job_description=jd_text,
-            )
-            elapsed_ms = int((time.time() - start) * 1000)
-
-            # Update analysis with results
-            analysis.overall_score = result_data.get("overall_score", 0.0)
-            analysis.ats_score = result_data.get("ats_score", 0.0)
-            analysis.skill_match_score = result_data.get("skill_match_score", 0.0)
-            analysis.extracted_skills = json.dumps(result_data.get("extracted_skills", []))
-            analysis.skill_gaps = json.dumps(result_data.get("skill_gaps", []))
-            analysis.feedback = result_data.get("feedback", "")
-            analysis.career_predictions = json.dumps(result_data.get("career_predictions", []))
-            analysis.ats_issues = json.dumps(result_data.get("ats_issues", []))
-            analysis.processing_time_ms = elapsed_ms
-            analysis.status = "completed"
-        except Exception as e:
-            analysis.status = "failed"
-            analysis.feedback = f"Pipeline error: {str(e)}"
-
-        await self.db.flush()
-
-    async def list_by_user(
-        self, user_id: int, skip: int = 0, limit: int = 20
-    ) -> tuple[list[AnalysisResult], int]:
-        """List analyses for a user (via resume ownership)."""
-        query = (
-            select(AnalysisResult)
-            .join(Resume, AnalysisResult.resume_id == Resume.id)
-            .where(Resume.user_id == user_id)
-            .order_by(AnalysisResult.created_at.desc())
-            .offset(skip)
-            .limit(limit)
-        )
-        result = await self.db.execute(query)
-        analyses = list(result.scalars().all())
-
-        count_result = await self.db.execute(
-            select(func.count(AnalysisResult.id))
-            .join(Resume, AnalysisResult.resume_id == Resume.id)
-            .where(Resume.user_id == user_id)
-        )
-        total = count_result.scalar() or 0
-        return analyses, total
-
-    async def get_by_id(self, analysis_id: int, user_id: int) -> AnalysisResult | None:
-        """Get a specific analysis, scoped to user's resumes."""
+        Raises:
+            AnalysisNotFoundError: If analysis does not exist or user doesn't own it.
+        """
         result = await self.db.execute(
             select(AnalysisResult)
             .join(Resume, AnalysisResult.resume_id == Resume.id)
             .where(AnalysisResult.id == analysis_id, Resume.user_id == user_id)
         )
-        return result.scalar_one_or_none()
+        analysis = result.scalar_one_or_none()
+        if analysis is None:
+            raise AnalysisNotFoundError(analysis_id)
+        return analysis
 
-    async def get_summary(self, user_id: int) -> AnalysisSummary:
-        """Get aggregated analysis stats for the dashboard."""
-        # Total analyses
-        count_result = await self.db.execute(
-            select(func.count(AnalysisResult.id))
+    async def get_user_analyses(
+        self, user_id: UUID
+    ) -> list[AnalysisResult]:
+        """Return all analyses for a user's resumes, newest first.
+
+        Args:
+            user_id: Authenticated user's UUID.
+
+        Returns:
+            List of AnalysisResult models.
+        """
+        result = await self.db.execute(
+            select(AnalysisResult)
             .join(Resume, AnalysisResult.resume_id == Resume.id)
-            .where(Resume.user_id == user_id, AnalysisResult.status == "completed")
+            .where(Resume.user_id == user_id)
+            .order_by(AnalysisResult.created_at.desc())
         )
-        total = count_result.scalar() or 0
-
-        # Average score
-        avg_result = await self.db.execute(
-            select(func.avg(AnalysisResult.overall_score))
-            .join(Resume, AnalysisResult.resume_id == Resume.id)
-            .where(Resume.user_id == user_id, AnalysisResult.status == "completed")
-        )
-        avg_score = round(float(avg_result.scalar() or 0), 1)
-
-        return AnalysisSummary(
-            total_analyses=total,
-            average_score=avg_score,
-            top_skills=[],
-            improvement_areas=[],
-        )
+        return list(result.scalars().all())

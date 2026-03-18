@@ -1,69 +1,94 @@
-"""Resume router — /resume/* endpoints."""
+"""Resume router — /resume/* endpoints for upload, list, get, delete."""
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+import uuid
+
+from fastapi import APIRouter, Depends, File, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_active_user
 from app.models.user import User
-from app.schemas.resume import ResumeListResponse, ResumeResponse, ResumeUploadResponse
+from app.schemas.resume import ResumeResponse, ResumeUploadResponse
 from app.services.resume_service import ResumeService
 
 router = APIRouter()
 
 
-@router.post("/upload", response_model=ResumeUploadResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/upload",
+    response_model=ResumeUploadResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload a resume PDF",
+    description=(
+        "Upload a single PDF file (max 10MB). "
+        "The file is saved to the server and a database record is created."
+    ),
+)
 async def upload_resume(
-    file: UploadFile = File(...),
+    file: UploadFile = File(
+        ..., description="PDF resume file to upload"
+    ),
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
-    """Upload a resume PDF."""
-    if file.content_type != "application/pdf":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only PDF files are accepted",
-        )
+    """Upload a new resume PDF file."""
     service = ResumeService(db)
-    resume = await service.upload(file=file, user_id=current_user.id)
-    return ResumeUploadResponse(id=resume.id, filename=resume.filename)
+    resume = await service.upload_resume(
+        user_id=current_user.id, file=file
+    )
+    return ResumeUploadResponse(
+        id=resume.id,
+        original_filename=resume.original_filename,
+        file_size_bytes=resume.file_size_bytes,
+    )
 
 
-@router.get("/", response_model=ResumeListResponse)
+@router.get(
+    "/",
+    response_model=list[ResumeResponse],
+    summary="List user's resumes",
+    description="Returns all resumes uploaded by the authenticated user, newest first.",
+)
 async def list_resumes(
-    skip: int = 0,
-    limit: int = 20,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """List all resumes for the current user."""
     service = ResumeService(db)
-    resumes, total = await service.list_by_user(user_id=current_user.id, skip=skip, limit=limit)
-    return ResumeListResponse(resumes=resumes, total=total)
+    return await service.get_user_resumes(user_id=current_user.id)
 
 
-@router.get("/{resume_id}", response_model=ResumeResponse)
+@router.get(
+    "/{resume_id}",
+    response_model=ResumeResponse,
+    summary="Get a specific resume",
+    description="Fetch a single resume by ID. Returns 403 if the user does not own it.",
+)
 async def get_resume(
-    resume_id: int,
+    resume_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
-    """Get a specific resume."""
+    """Get a specific resume by ID."""
     service = ResumeService(db)
-    resume = await service.get_by_id(resume_id=resume_id, user_id=current_user.id)
-    if not resume:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resume not found")
-    return resume
+    return await service.get_resume_by_id(
+        resume_id=resume_id, user_id=current_user.id
+    )
 
 
-@router.delete("/{resume_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{resume_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a resume",
+    description="Delete a resume and its PDF file from disk. Returns 404 if not found.",
+)
 async def delete_resume(
-    resume_id: int,
+    resume_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
-    """Delete a resume."""
+    """Delete a resume by ID."""
     service = ResumeService(db)
-    deleted = await service.delete(resume_id=resume_id, user_id=current_user.id)
-    if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resume not found")
+    await service.delete_resume(
+        resume_id=resume_id, user_id=current_user.id
+    )

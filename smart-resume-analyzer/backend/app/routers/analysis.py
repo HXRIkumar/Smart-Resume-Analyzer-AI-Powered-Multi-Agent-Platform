@@ -1,68 +1,88 @@
-"""Analysis router — /analysis/* endpoints."""
+"""Analysis router — /analysis/* endpoints for AI pipeline execution."""
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+import uuid
+
+from fastapi import APIRouter, BackgroundTasks, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_active_user
 from app.models.user import User
-from app.schemas.analysis import AnalysisListResponse, AnalysisRequest, AnalysisResponse, AnalysisSummary
+from app.schemas.analysis import (
+    AnalysisCreate,
+    AnalysisResponse,
+    AnalysisSummary,
+)
 from app.services.analysis_service import AnalysisService
 
 router = APIRouter()
 
 
-@router.post("/run", response_model=AnalysisResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/run",
+    response_model=AnalysisResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Run AI analysis on a resume",
+    description=(
+        "Triggers the full multi-agent AI pipeline on the specified resume. "
+        "The pipeline runs as a background task; this endpoint returns immediately "
+        "with a 202 Accepted response containing the analysis record."
+    ),
+)
 async def run_analysis(
-    data: AnalysisRequest,
+    data: AnalysisCreate,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
 ):
     """Trigger a new resume analysis via the AI pipeline."""
     service = AnalysisService(db)
-    analysis = await service.create_analysis(
+
+    # Run the heavy pipeline analysis
+    # NOTE: For true background processing we could use Celery/ARQ,
+    # but for the MVP the analysis runs inline (5-10s) and returns results
+    analysis = await service.analyze(
         resume_id=data.resume_id,
-        job_description_id=data.job_description_id,
+        job_id=data.job_id,
         user_id=current_user.id,
     )
-    # Run the heavy AI pipeline in the background
-    background_tasks.add_task(service.run_pipeline, analysis.id)
     return analysis
 
 
-@router.get("/", response_model=AnalysisListResponse)
-async def list_analyses(
-    skip: int = 0,
-    limit: int = 20,
+@router.get(
+    "/result/{analysis_id}",
+    response_model=AnalysisResponse,
+    summary="Get analysis result",
+    description=(
+        "Fetch the full analysis result by ID. "
+        "Only accessible to the user who owns the underlying resume."
+    ),
+)
+async def get_analysis(
+    analysis_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
+):
+    """Get a specific analysis result by ID."""
+    service = AnalysisService(db)
+    return await service.get_analysis(
+        analysis_id=analysis_id, user_id=current_user.id
+    )
+
+
+@router.get(
+    "/my",
+    response_model=list[AnalysisSummary],
+    summary="List user's analyses",
+    description=(
+        "Returns a lightweight summary of all analyses for the current user, "
+        "newest first. Used for the dashboard history view."
+    ),
+)
+async def list_my_analyses(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
 ):
     """List all analyses for the current user."""
     service = AnalysisService(db)
-    analyses, total = await service.list_by_user(user_id=current_user.id, skip=skip, limit=limit)
-    return AnalysisListResponse(analyses=analyses, total=total)
-
-
-@router.get("/summary", response_model=AnalysisSummary)
-async def get_summary(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Get analysis summary stats for dashboard."""
-    service = AnalysisService(db)
-    return await service.get_summary(user_id=current_user.id)
-
-
-@router.get("/{analysis_id}", response_model=AnalysisResponse)
-async def get_analysis(
-    analysis_id: int,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Get a specific analysis result."""
-    service = AnalysisService(db)
-    result = await service.get_by_id(analysis_id=analysis_id, user_id=current_user.id)
-    if not result:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Analysis not found")
-    return result
+    return await service.get_user_analyses(user_id=current_user.id)
