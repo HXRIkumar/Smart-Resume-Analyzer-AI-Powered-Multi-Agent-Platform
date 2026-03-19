@@ -1,68 +1,78 @@
-.PHONY: install dev migrate test docker-up docker-down lint format clean
+# ──────────────────────────────────────────────────────────────
+# Smart Resume Analyzer — Makefile
+# ──────────────────────────────────────────────────────────────
 
-# ─── Install all dependencies ───
-install:
-	@echo "📦 Installing backend dependencies..."
+.PHONY: install dev prod migrate test seed logs shell clean lint help
+
+# ─── Help ─────────────────────────────────────────────────────
+help: ## Show this help
+	@echo "Smart Resume Analyzer — Available commands:"
+	@echo ""
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
+
+# ─── Install ─────────────────────────────────────────────────
+install: ## Install backend + frontend dependencies
 	cd backend && pip install -r requirements.txt
-	@echo "📦 Installing frontend dependencies..."
 	cd frontend && npm install
-	@echo "✅ All dependencies installed."
 
-# ─── Start dev servers ───
-dev:
-	@echo "🚀 Starting development servers..."
-	@make -j2 dev-backend dev-frontend
+# ─── Dev ──────────────────────────────────────────────────────
+dev: ## Start all services in development mode
+	docker-compose up --build
 
-dev-backend:
-	cd backend && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+dev-bg: ## Start all services in background
+	docker-compose up --build -d
 
-dev-frontend:
-	cd frontend && npm run dev
+# ─── Prod ─────────────────────────────────────────────────────
+prod: ## Start production deployment
+	docker-compose -f docker-compose.prod.yml up -d --build
 
-# ─── Database migrations ───
-migrate:
-	@echo "🗃️  Running Alembic migrations..."
-	cd backend && alembic upgrade head
+prod-down: ## Stop production deployment
+	docker-compose -f docker-compose.prod.yml down
 
-migrate-generate:
-	@echo "🗃️  Generating new migration..."
-	cd backend && alembic revision --autogenerate -m "$(msg)"
+# ─── Database ─────────────────────────────────────────────────
+migrate: ## Run Alembic migrations
+	docker-compose exec backend alembic upgrade head
 
-# ─── Run tests ───
-test:
-	@echo "🧪 Running backend tests..."
-	cd backend && pytest -v --tb=short
+migration: ## Create a new Alembic migration (usage: make migration msg="add users table")
+	docker-compose exec backend alembic revision --autogenerate -m "$(msg)"
 
-test-cov:
-	@echo "🧪 Running tests with coverage..."
-	cd backend && pytest --cov=app --cov-report=html -v
+# ─── Testing ─────────────────────────────────────────────────
+test: ## Run backend tests with coverage
+	docker-compose exec backend pytest -v --cov=app --cov-report=term-missing
 
-# ─── Docker ───
-docker-up:
-	@echo "🐳 Starting Docker containers..."
-	docker compose up --build -d
+test-local: ## Run backend tests locally (no Docker)
+	cd backend && pytest -v --cov=app --cov-report=term-missing
 
-docker-down:
-	@echo "🐳 Stopping Docker containers..."
-	docker compose down
+# ─── Seed Data ───────────────────────────────────────────────
+seed: ## Seed database with sample data
+	docker-compose exec backend python scripts/seed_data.py
 
-docker-logs:
-	docker compose logs -f
+# ─── Logs ─────────────────────────────────────────────────────
+logs: ## Follow backend logs
+	docker-compose logs -f backend
 
-# ─── Linting ───
-lint:
-	@echo "🔍 Running ruff linter..."
-	cd backend && ruff check app/ tests/
+logs-all: ## Follow all service logs
+	docker-compose logs -f
 
-format:
-	@echo "✨ Formatting code..."
-	cd backend && ruff format app/ tests/
+# ─── Shell ────────────────────────────────────────────────────
+shell: ## Open bash shell in backend container
+	docker-compose exec backend bash
 
-# ─── Cleanup ───
-clean:
-	@echo "🧹 Cleaning up..."
-	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-	find . -type d -name .pytest_cache -exec rm -rf {} + 2>/dev/null || true
-	find . -name "*.pyc" -delete 2>/dev/null || true
-	rm -rf backend/htmlcov backend/.coverage
-	@echo "✅ Clean complete."
+psql: ## Open psql shell in postgres container
+	docker-compose exec postgres psql -U $${POSTGRES_USER:-sra_user} -d $${POSTGRES_DB:-smart_resume}
+
+# ─── Lint ─────────────────────────────────────────────────────
+lint: ## Lint backend and frontend
+	cd backend && python -m flake8 app/ --max-line-length=120 --exclude=__pycache__
+	cd frontend && npm run lint 2>/dev/null || true
+
+# ─── Cleanup ─────────────────────────────────────────────────
+clean: ## Stop containers, remove volumes
+	docker-compose down -v
+	docker-compose -f docker-compose.prod.yml down -v 2>/dev/null || true
+	rm -rf frontend/dist backend/__pycache__
+
+# ─── Status ───────────────────────────────────────────────────
+status: ## Show running containers
+	docker-compose ps

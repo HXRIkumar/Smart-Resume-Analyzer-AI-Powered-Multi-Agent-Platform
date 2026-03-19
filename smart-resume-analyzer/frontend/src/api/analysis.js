@@ -1,18 +1,40 @@
-import client from './client';
+/**
+ * Analysis API endpoints.
+ *
+ * @module api/analysis
+ */
 
-export const analysisAPI = {
-    run: (resumeId, jobDescriptionId = null) =>
-        client.post('/analysis/run', {
-            resume_id: resumeId,
-            job_description_id: jobDescriptionId,
-        }),
+import api from './client';
 
-    list: (skip = 0, limit = 20) =>
-        client.get('/analysis/', { params: { skip, limit } }),
+/**
+ * Run AI analysis on a resume.
+ *
+ * @param {string} resumeId - Resume UUID.
+ * @param {string|null} [jobId=null] - Optional job description UUID.
+ * @returns {Promise<import('axios').AxiosResponse>} 202 with AnalysisResponse.
+ */
+export function runAnalysis(resumeId, jobId = null) {
+    return api.post('/analysis/run', {
+        resume_id: resumeId,
+        job_id: jobId,
+    });
+}
 
-    getById: (id) =>
-        client.get(`/analysis/${id}`),
+/**
+ * Get a single analysis result.
+ *
+ * @param {string} id - Analysis UUID.
+ * @returns {Promise<import('axios').AxiosResponse>} Response with AnalysisResponse.
+ */
+export function getAnalysisResult(id) {
+    return api.get(`/analysis/result/${id}`);
+}
 
-    getSummary: () =>
-        client.get('/analysis/summary'),
-};
+/**
+ * Get all analyses for the current user.
+ *
+ * @returns {Promise<import('axios').AxiosResponse>} Response with AnalysisSummary[].
+ */
+export function getMyAnalyses() {
+    return api.get('/analysis/my');
+}

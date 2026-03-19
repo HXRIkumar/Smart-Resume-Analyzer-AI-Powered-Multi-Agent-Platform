@@ -1,20 +1,40 @@
-import client from './client';
+/**
+ * Resume API endpoints.
+ *
+ * @module api/resume
+ */
 
-export const resumeAPI = {
-    upload: (file) => {
-        const formData = new FormData();
-        formData.append('file', file);
-        return client.post('/resume/upload', formData, {
-            headers: { 'Content-Type': 'multipart/form-data' },
-        });
-    },
+import api from './client';
 
-    list: (skip = 0, limit = 20) =>
-        client.get('/resume/', { params: { skip, limit } }),
+/**
+ * Upload a resume PDF file.
+ *
+ * @param {File} file - The PDF file to upload.
+ * @returns {Promise<import('axios').AxiosResponse>} Response with ResumeUploadResponse.
+ */
+export function uploadResume(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    return api.post('/resume/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+    });
+}
 
-    getById: (id) =>
-        client.get(`/resume/${id}`),
+/**
+ * Get all resumes for the current user.
+ *
+ * @returns {Promise<import('axios').AxiosResponse>} Response with ResumeResponse[].
+ */
+export function getMyResumes() {
+    return api.get('/resume/');
+}
 
-    delete: (id) =>
-        client.delete(`/resume/${id}`),
-};
+/**
+ * Delete a resume by ID.
+ *
+ * @param {string} id - Resume UUID.
+ * @returns {Promise<import('axios').AxiosResponse>} 204 No Content.
+ */
+export function deleteResume(id) {
+    return api.delete(`/resume/${id}`);
+}

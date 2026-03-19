@@ -1,149 +1,50 @@
-"""Security utilities — password hashing, JWT access/refresh tokens.
+import os
+import warnings
+warnings.filterwarnings("ignore", ".*error reading bcrypt version.*")
 
-Production-grade implementation using bcrypt + python-jose (HS256).
-All token operations include proper error handling and expiration.
-"""
-
-from datetime import datetime, timedelta, timezone
-
-from fastapi import HTTPException, status
-from jose import ExpiredSignatureError, JWTError, jwt
+from datetime import datetime, timedelta
+from typing import Optional
+from jose import JWTError, jwt
 from passlib.context import CryptContext
 
-from app.config import settings
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
 
-# ─── Password Hashing ───────────────────────────────────────────────────────
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-# Token lifetimes
-ACCESS_TOKEN_EXPIRE = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-REFRESH_TOKEN_EXPIRE = timedelta(days=7)
-
+SECRET_KEY = os.getenv("SECRET_KEY", "fallback-secret-key-change-in-production")
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 
 def hash_password(password: str) -> str:
-    """Hash a plaintext password using bcrypt.
-
-    Args:
-        password: The plaintext password to hash.
-
-    Returns:
-        The bcrypt-hashed password string.
-    """
-    return pwd_context.hash(password)
-
+    return pwd_context.hash(password[:72])
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a plaintext password against its bcrypt hash.
+    try:
+        return pwd_context.verify(plain_password[:72], hashed_password)
+    except Exception:
+        return False
 
-    Args:
-        plain_password: The plaintext password to verify.
-        hashed_password: The stored bcrypt hash.
-
-    Returns:
-        True if the password matches, False otherwise.
-    """
-    return pwd_context.verify(plain_password, hashed_password)
-
-
-def create_access_token(
-    data: dict,
-    expires_delta: timedelta | None = None,
-) -> str:
-    """Create a short-lived JWT access token.
-
-    Args:
-        data: Claims to encode. Must include 'sub' (user id).
-        expires_delta: Custom expiration. Defaults to ACCESS_TOKEN_EXPIRE.
-
-    Returns:
-        Encoded JWT string.
-    """
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    now = datetime.now(timezone.utc)
-    expire = now + (expires_delta or ACCESS_TOKEN_EXPIRE)
-    to_encode.update({
-        "exp": expire,
-        "iat": now,
-        "type": "access",
-    })
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-
-
-def create_refresh_token(user_id: str) -> str:
-    """Create a long-lived JWT refresh token (7-day expiry).
-
-    Args:
-        user_id: The user's UUID as a string.
-
-    Returns:
-        Encoded JWT refresh token string.
-    """
-    now = datetime.now(timezone.utc)
-    to_encode = {
-        "sub": user_id,
-        "exp": now + REFRESH_TOKEN_EXPIRE,
-        "iat": now,
-        "type": "refresh",
-    }
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
-
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    to_encode.update({"exp": expire, "iat": datetime.utcnow()})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 def decode_access_token(token: str) -> dict:
-    """Decode and validate a JWT access token.
-
-    Args:
-        token: The encoded JWT string.
-
-    Returns:
-        The decoded payload dictionary.
-
-    Raises:
-        HTTPException 401: If the token is expired, invalid, or malformed.
-    """
     try:
-        payload = jwt.decode(
-            token,
-            settings.SECRET_KEY,
-            algorithms=[settings.ALGORITHM],
-        )
-        if payload.get("sub") is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token missing subject claim",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return payload
-    except ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise ValueError("Invalid or expired token")
 
+def create_refresh_token(user_id: str) -> str:
+    return create_access_token(
+        data={"sub": user_id, "type": "refresh"},
+        expires_delta=timedelta(days=7)
+    )
 
 def decode_refresh_token(token: str) -> dict:
-    """Decode and validate a JWT refresh token.
-
-    Args:
-        token: The encoded JWT refresh token string.
-
-    Returns:
-        The decoded payload dictionary.
-
-    Raises:
-        HTTPException 401: If the token is expired, invalid, or not a refresh token.
-    """
-    payload = decode_access_token(token)
-    if payload.get("type") != "refresh":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token type — expected refresh token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return payload
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "refresh":
+            raise ValueError("Not a refresh token")
+        return payload
+    except JWTError:
+        raise ValueError("Invalid or expired refresh token")

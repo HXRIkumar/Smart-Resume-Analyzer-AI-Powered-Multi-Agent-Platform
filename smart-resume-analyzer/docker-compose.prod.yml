@@ -1,83 +1,108 @@
-version: "3.8"
+# ──────────────────────────────────────────────────────────────
+# Smart Resume Analyzer — Production Docker Compose
+# ──────────────────────────────────────────────────────────────
+# Usage: docker-compose -f docker-compose.prod.yml up -d
+# ──────────────────────────────────────────────────────────────
 
 services:
-  # ─── PostgreSQL (Production) ───
+  # ─── PostgreSQL (no external port) ──────────────────────────
   postgres:
-    image: postgres:16-alpine
+    image: postgres:15-alpine
     container_name: sra-postgres-prod
     restart: always
     environment:
-      POSTGRES_USER: ${DB_USER:-sra_user}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: ${DB_NAME:-smart_resume_db}
+      POSTGRES_DB: ${POSTGRES_DB:-smart_resume}
+      POSTGRES_USER: ${POSTGRES_USER:-sra_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - postgres_prod_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-sra_user} -d ${DB_NAME:-smart_resume_db}"]
-      interval: 10s
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sra_user} -d ${POSTGRES_DB:-smart_resume}" ]
+      interval: 15s
       timeout: 5s
       retries: 5
-    networks:
-      - sra-network
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.5"
 
-  # ─── Redis (Production) ───
+  # ─── Redis ─────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: sra-redis-prod
     restart: always
-    command: redis-server --requirepass ${REDIS_PASSWORD}
-    volumes:
-      - redis_prod_data:/data
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
-      interval: 10s
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 15s
       timeout: 5s
       retries: 5
-    networks:
-      - sra-network
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.25"
 
-  # ─── Backend (Production) ───
+  # ─── Backend (FastAPI — production) ────────────────────────
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: sra-backend-prod
     restart: always
-    env_file:
-      - .env
-    environment:
-      ENVIRONMENT: production
-    volumes:
-      - uploads_prod_data:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
-    networks:
-      - sra-network
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sra_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-smart_resume}
+      REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: production
+    volumes:
+      - uploads_data:/app/uploads
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
 
-  # ─── Frontend (Production — NGINX) ───
+  # ─── Frontend (nginx — production) ─────────────────────────
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: sra-frontend-prod
     restart: always
+    depends_on:
+      backend:
+        condition: service_healthy
     ports:
       - "80:80"
-      - "443:443"
-    depends_on:
-      - backend
-    networks:
-      - sra-network
+    healthcheck:
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.25"
 
 volumes:
-  postgres_prod_data:
-  redis_prod_data:
-  uploads_prod_data:
-
-networks:
-  sra-network:
-    driver: bridge
+  postgres_data:
+    driver: local
+  uploads_data:
+    driver: local

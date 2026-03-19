@@ -1,36 +1,30 @@
-import axios from 'axios';
-import { useAuthStore } from '../store/authStore';
+import axios from 'axios'
 
-const client = axios.create({
+export const api = axios.create({
     baseURL: import.meta.env.VITE_API_URL || 'http://localhost:8000',
-    headers: {
-        'Content-Type': 'application/json',
-    },
     timeout: 30000,
-});
+    headers: { 'Content-Type': 'application/json' },
+})
 
-// ─── Request interceptor: attach JWT ───
-client.interceptors.request.use(
-    (config) => {
-        const token = useAuthStore.getState().token;
-        if (token) {
-            config.headers.Authorization = `Bearer ${token}`;
-        }
-        return config;
-    },
-    (error) => Promise.reject(error),
-);
+api.interceptors.request.use((config) => {
+    try {
+        const token = localStorage.getItem('access_token')
+        if (token) config.headers.Authorization = `Bearer ${token}`
+    } catch { }
+    return config
+})
 
-// ─── Response interceptor: handle 401 ───
-client.interceptors.response.use(
-    (response) => response,
+api.interceptors.response.use(
+    (res) => res,
     (error) => {
-        if (error.response?.status === 401) {
-            useAuthStore.getState().logout();
-            window.location.href = '/login';
+        const message = error?.response?.data?.detail || error?.message || 'Something went wrong'
+        if (error?.response?.status === 401) {
+            localStorage.removeItem('access_token')
+            localStorage.removeItem('user')
+            window.location.href = '/login'
         }
-        return Promise.reject(error);
-    },
-);
+        return Promise.reject(new Error(message))
+    }
+)
 
-export default client;
+export default api

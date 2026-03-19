@@ -1,28 +1,42 @@
-# ─── Frontend Dockerfile ───
+# ──────────────────────────────────────────────────────────────
+# Stage 1: Build — compile React app
+# ──────────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# Install dependencies first (layer caching)
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN npm ci --silent
 
+# Copy source and build
 COPY . .
 RUN npm run build
 
-# ─── Production stage ───
+# ──────────────────────────────────────────────────────────────
+# Stage 2: Serve — nginx for static files
+# ──────────────────────────────────────────────────────────────
 FROM nginx:alpine
 
+# Remove default nginx config
+RUN rm /etc/nginx/conf.d/default.conf
+
+# Copy custom nginx config
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Copy built assets from builder
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# SPA routing — redirect all routes to index.html
-RUN echo 'server { \
-    listen 80; \
-    location / { \
-        root /usr/share/nginx/html; \
-        index index.html; \
-        try_files $uri $uri/ /index.html; \
-    } \
-}' > /etc/nginx/conf.d/default.conf
+# Non-root nginx (optional — nginx:alpine runs as root by default for port 80)
+RUN chown -R nginx:nginx /usr/share/nginx/html && \
+    chown -R nginx:nginx /var/cache/nginx && \
+    chown -R nginx:nginx /var/log/nginx && \
+    touch /var/run/nginx.pid && \
+    chown -R nginx:nginx /var/run/nginx.pid
 
 EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:80/ || exit 1
+
 CMD ["nginx", "-g", "daemon off;"]

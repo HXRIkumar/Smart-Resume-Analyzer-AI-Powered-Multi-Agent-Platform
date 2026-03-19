@@ -56,7 +56,7 @@ class AnalysisResponse(BaseModel):
     # ─── Skills ──────────────────────────────────────────────────────────
     present_skills: list[str] = Field(default_factory=list)
     missing_skills: list[str] = Field(default_factory=list)
-    recommended_skills: dict | None = None
+    recommended_skills: list | dict | None = None
 
     # ─── Recommendations ─────────────────────────────────────────────────
     recommended_courses: dict | None = None
@@ -69,7 +69,7 @@ class AnalysisResponse(BaseModel):
     ai_feedback_text: str | None = None
 
     # ─── Audit ───────────────────────────────────────────────────────────
-    agent_pipeline_log: dict | None = None
+    agent_pipeline_log: list | dict | None = None
 
     # ─── Timestamp ───────────────────────────────────────────────────────
     created_at: datetime

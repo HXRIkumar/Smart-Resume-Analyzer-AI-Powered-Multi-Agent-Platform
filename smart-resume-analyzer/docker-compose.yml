@@ -1,81 +1,85 @@
-version: "3.8"
+# ──────────────────────────────────────────────────────────────
+# Smart Resume Analyzer — Development Docker Compose
+# ──────────────────────────────────────────────────────────────
+# Usage: docker-compose up --build
+# ──────────────────────────────────────────────────────────────
 
 services:
-  # ─── PostgreSQL ───
+  # ─── PostgreSQL ─────────────────────────────────────────────
   postgres:
-    image: postgres:16-alpine
+    image: postgres:15-alpine
     container_name: sra-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: smart_resume_db
+      POSTGRES_DB: ${POSTGRES_DB:-smart_resume}
+      POSTGRES_USER: ${POSTGRES_USER:-sra_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sra_password}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U user -d smart_resume_db"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sra_user} -d ${POSTGRES_DB:-smart_resume}" ]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
-  # ─── Redis ───
+  # ─── Redis ─────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: sra-redis
     restart: unless-stopped
     ports:
       - "6379:6379"
-    volumes:
-      - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # ─── Backend ───
+  # ─── Backend (FastAPI — hot reload) ────────────────────────
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: sra-backend
     restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://user:password@postgres:5432/smart_resume_db
-      REDIS_URL: redis://redis:6379
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./backend:/app
-      - uploads_data:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-sra_user}:${POSTGRES_PASSWORD:-sra_password}@postgres:5432/${POSTGRES_DB:-smart_resume}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./uploads:/app/uploads
+    command: uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
-  # ─── Frontend ───
+  # ─── Frontend (Vite dev server) ────────────────────────────
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: node:20-alpine
     container_name: sra-frontend
+    working_dir: /app
     restart: unless-stopped
+    depends_on:
+      - backend
     ports:
       - "5173:5173"
     volumes:
       - ./frontend:/app
       - /app/node_modules
-    depends_on:
-      - backend
-    command: npm run dev -- --host 0.0.0.0
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      - VITE_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-placeholder}
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
 
 volumes:
   postgres_data:
-  redis_data:
-  uploads_data:
+    driver: local
