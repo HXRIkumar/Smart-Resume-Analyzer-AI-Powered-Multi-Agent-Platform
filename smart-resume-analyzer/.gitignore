@@ -1,80 +1,23 @@
-# ──────────────────────────────────────────────────────────────
 # Smart Resume Analyzer — .gitignore
-# ──────────────────────────────────────────────────────────────
-
-# Environment files - NEVER commit these
 .env
 .env.local
-.env.production
-.env.staging
 backend/.env
 frontend/.env
 *.env
-
-# Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-venv/
-env/
-ENV/
 .venv/
-dist/
-build/
-*.egg-info/
-.pytest_cache/
-.coverage
-htmlcov/
-.mypy_cache/
-.ruff_cache/
-
-# Node / Frontend
+venv/
 node_modules/
 frontend/node_modules/
 frontend/dist/
-frontend/build/
-.npm/
-npm-debug.log*
-
-# Docker
-docker-compose.override.yml
-
-# Uploads (user data - never commit)
 uploads/
 backend/uploads/
 *.pdf
-*.PDF
-
-# Database
-*.db
-*.sqlite
-*.sqlite3
-postgres_data/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-.DS_Store
-Thumbs.db
-
-# Logs
 *.log
-logs/
-*.pid
-
-# Keys and secrets
+.DS_Store
+.coverage
+.pytest_cache/
+postgres_data/
 *.pem
 *.key
-*.cert
-*.p12
-id_rsa
-id_rsa.pub
-*.secret
-
-# Coverage
-coverage/
-.nyc_output/
