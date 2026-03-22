@@ -34,7 +34,7 @@
 
 Unlike rule-based ATS checkers, this platform deploys a **5-agent autonomous pipeline**: each agent is a specialized AI module that observes, reasons, and acts on your resume independently — from PDF parsing to Gemini-powered human feedback.
 
-
+</div>
 
 <br/>
 
