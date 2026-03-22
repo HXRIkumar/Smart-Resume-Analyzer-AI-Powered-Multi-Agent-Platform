@@ -22,9 +22,6 @@
 
 <br/>
 
-<br/>
-
-<br/>
 
 ---
 
@@ -46,6 +43,10 @@ Unlike rule-based ATS checkers, this platform deploys a **5-agent autonomous pip
 |:---:|:---:|:---:|
 | Parallel agents for parsing, scoring, skill analysis, career prediction, and AI feedback — all orchestrated automatically. | ATS score, skill gap analysis, 200+ tech skills detected, career path matching with confidence %, and section-by-section breakdown. | FastAPI REST backend + React 18 dashboard with JWT auth, Google OAuth, admin analytics, and Docker deployment. |
 
+
+<br/>
+
+<br/>
 </div>
 
 <br/>
