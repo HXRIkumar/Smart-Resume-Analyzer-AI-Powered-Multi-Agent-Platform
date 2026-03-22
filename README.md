@@ -19,8 +19,10 @@
 ![Status](https://img.shields.io/badge/Status-Production_Ready-brightgreen?style=flat-square)
 ![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-1D9E75?style=flat-square)
 ![spaCy](https://img.shields.io/badge/spaCy-NLP-09A3D5?style=flat-square&logo=spacy&logoColor=white)
-<div align="center">
-</div>
+
+<br/>
+
+<br/>
 
 <br/>
 
