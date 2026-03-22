@@ -1,4 +1,4 @@
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:0F2027,50:1D9E75,100:0F6E56&height=240&section=header&text=Smart%20Resume%20Analyzer&fontSize=64&fontColor=ffffff&animation=fadeIn&fontAlignY=34&desc=AI-Powered%20Multi-Agent%20Resume%20Intelligence%20Platform&descAlignY=56&descSize=18&descColor=9FE1CB" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:0F2027,50:1D9E75,100:0F6E56&height=240&section=header&text=Smart+Resume+Analyzer&fontSize=46&fontColor=ffffff&animation=fadeIn&fontAlignY=34&desc=AI-Powered+Multi-Agent+Resume+Intelligence+Platform&descAlignY=56&descSize=18&descColor=9FE1CB" width="100%"/>
 
 <div align="center">
 
@@ -20,8 +20,9 @@
 ![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-1D9E75?style=flat-square)
 ![spaCy](https://img.shields.io/badge/spaCy-NLP-09A3D5?style=flat-square&logo=spacy&logoColor=white)
 
-<br/>
+</div>
 
+<br/>
 
 ---
 
@@ -33,8 +34,6 @@
 
 Unlike rule-based ATS checkers, this platform deploys a **5-agent autonomous pipeline**: each agent is a specialized AI module that observes, reasons, and acts on your resume independently — from PDF parsing to Gemini-powered human feedback.
 
-</div>
-
 <br/>
 
 <div align="center">
@@ -42,13 +41,6 @@ Unlike rule-based ATS checkers, this platform deploys a **5-agent autonomous pip
 | 🤖 **5-Agent AI Pipeline** | 📊 **Deep Resume Intelligence** | 🌐 **Full-Stack SaaS** |
 |:---:|:---:|:---:|
 | Parallel agents for parsing, scoring, skill analysis, career prediction, and AI feedback — all orchestrated automatically. | ATS score, skill gap analysis, 200+ tech skills detected, career path matching with confidence %, and section-by-section breakdown. | FastAPI REST backend + React 18 dashboard with JWT auth, Google OAuth, admin analytics, and Docker deployment. |
-
-
-<br/>
-
----
-
-<br/>
 
 </div>
 
@@ -640,7 +632,7 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 <br/>
 
-**Built with ❤️ by [Hari Kumar](https://github.com/HXRIkumar)**
+**Built with ❤️ by [Hari](https://github.com/HXRIkumar)**
 
 <br/>
 
@@ -655,4 +647,4 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 </div>
 
-<img src="https://capsule-render.vercel.app/api?type=waving&color=0:0F6E56,50:1D9E75,100:0F2027&height=120&section=footer" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0:0F6E56,50:1D9E75,100:0F2027&height=120&section=footer&animation=fadeIn" width="100%"/>
