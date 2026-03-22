@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![Typing SVG](https://readme-typing-svg.herokuapp.com?font=Fira+Code&weight=600&size=22&duration=3000&pause=1000&color=1D9E75&center=true&vCenter=true&multiline=true&repeat=true&width=800&height=100&lines=🤖+5-Agent+AI+Pipeline+—+Parse+→+Analyze+→+Score+→+Predict+→+Advise;🎯+ATS+Scoring+%2B+Skill+Gap+Analysis+%2B+Career+Path+Prediction;🔐+JWT+%2B+Google+OAuth+2.0+—+Enterprise-Grade+Auth;📊+200%2B+Skills+Detected+via+spaCy+NLP+%2B+Gemini+AI+Feedback)](https://git.io/typing-svg)
+[![Typing SVG](https://readme-typing-svg.herokuapp.com?font=Fira+Code&weight=600&size=16&duration=3000&pause=1000&color=1D9E75&center=true&vCenter=true&multiline=true&repeat=true&width=800&height=100&lines=5-Agent+AI+Pipeline+—+Parse+%E2%86%92+Analyze+%E2%86%92+Score+%E2%86%92+Predict+%E2%86%92+Advise;ATS+Scoring+%2B+Skill+Gap+Analysis+%2B+Career+Path+Prediction;JWT+%2B+Google+OAuth+2.0+—+Enterprise-Grade+Authentication;200%2B+Skills+Detected+via+spaCy+NLP+%2B+Gemini+AI+Feedback)](https://git.io/typing-svg)
 
 <br/>
 
